@@ -333,6 +333,12 @@
           <li>In a window you take turns: <b>play one ability or pass</b>. When both players pass in a row, the next column lands.</li>
           <li>Who moves first alternates every window, so nobody always gets the last word.</li>
         </ul>
+        <h3>🎰 Special hands</h3>
+        <ul>
+          <li><b>7-7-7 Jackpot</b> counts as a total of <b>${LR.RULES.sevensTotal}</b> instead of 21.</li>
+          <li><b>Run</b>: three digits climbing by one, left to right (0-1-2, 1-2-3 … 7-8-9), counts as <b>${LR.RULES.runTotal}</b>.</li>
+          <li>Watch out: a Jinx or Nudge can turn someone's hand into a special one — for better or worse.</li>
+        </ul>
         <h3>🌭 Hotdogs are your elixir</h3>
         <ul>
           <li>You start the match with 3 and get <b>+2 every window</b> (max 10).</li>
@@ -386,6 +392,7 @@
   // `online` lives as long as the peer connection, across rematches. `search` exists while we're
   // looking for someone (quick match, hosting a room, or joining one).
   let online = null, search = null;
+  const NET_VERSION = 2; // bump whenever the rules change, so both players always play the same game
 
   function netErrText(e) {
     const t = e && e.type;
@@ -522,7 +529,7 @@
     const o = { session: sess, opp: null, seat: sess.role === 'host' ? 0 : 1, rematch: { me: false, them: false }, gone: false, deck: save.deck.slice() };
     online = o;
     // Hello goes out before we listen, so the host's hello always reaches the guest before 'start'.
-    sess.send({ t: 'hello', v: 1, name: save.name, avatar: save.avatar, deck: o.deck, trophies: save.trophies });
+    sess.send({ t: 'hello', v: NET_VERSION, name: save.name, avatar: save.avatar, deck: o.deck, trophies: save.trophies });
     sess.onClose = () => remoteGone(o, 'disconnect');
     sess.listen((m) => onNet(o, m));
     S.good();
@@ -533,6 +540,7 @@
     if (o !== online) return;
     switch (m.t) {
       case 'hello': {
+        if (m.v !== NET_VERSION) { toast('Your opponent is on a different version of the game — both refresh the page'); leaveOnline(); if (current === 'online') renderOnlineBody(); return; }
         const deck = Array.isArray(m.deck) ? m.deck.filter((id) => typeof id === 'string' && Object.hasOwn(C, id)) : [];
         if (deck.length !== 3 || new Set(deck).size !== 3) { toast('Opponent sent an invalid deck'); leaveOnline(); if (current === 'online') renderOnlineBody(); return; }
         o.opp = {
@@ -736,6 +744,7 @@
     el('quitBtn').onclick = (ev) => { ev.stopPropagation(); askForfeit(); };
     el('battleRoot').onclick = () => { if (B && B.sel !== null) { B.sel = null; renderHands(); clearTargets(); } };
     B.shownHot = [0, 0];
+    B.shownSpecial = [null, null];
     renderPips(); renderHot(); renderHands(); renderMid();
   }
 
@@ -816,8 +825,18 @@
         b.textContent = txt;
         if (bump) { box.classList.remove('bump'); void box.offsetWidth; box.classList.add('bump'); }
       }
-      box.querySelector('small').textContent = s.landed < 3 && s.landed > 0 ? `+ ${3 - s.landed} to land` : s.landed === 0 ? 'spinning…' : '';
+      const sp = s.landed === 3 ? E.special(s.digits[p]) : null;
+      box.querySelector('small').textContent = sp === 'sevens' ? `🎰 777 = ${LR.RULES.sevensTotal}!`
+        : sp === 'run' ? `📶 RUN = ${LR.RULES.runTotal}!`
+        : s.landed < 3 && s.landed > 0 ? `+ ${3 - s.landed} to land` : s.landed === 0 ? 'spinning…' : '';
+      box.classList.toggle('special', !!sp);
       box.classList.toggle('leading', s.landed > 0 && t[p] < t[1 - p]);
+      if (bump && sp && B.shownSpecial[p] !== sp) {
+        const raw = s.digits[p].reduce((x, d) => x + d, 0), helped = t[p] < raw;
+        floater(box, `${sp === 'sevens' ? '🎰 JACKPOT' : '📶 RUN'} ${raw}→${t[p]}`, helped === (p === 0) ? 'good' : 'bad');
+        (sp === 'sevens' ? S.fanfare : S.good)();
+      }
+      B.shownSpecial[p] = sp;
     }
   }
 

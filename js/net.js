@@ -7,7 +7,7 @@
 // Once matched the host drops off the broker (peer.disconnect keeps the live connection),
 // which frees the shared id for the next pair.
 LR.Net = (() => {
-  const PREFIX = 'lowroller-v1-';
+  const PREFIX = 'lowroller-v2-';
   const QM_ID = `${PREFIX}quickmatch`;
   const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const CONNECT_MS = 12000, SILENT_MS = 20000, PING_MS = 2000;

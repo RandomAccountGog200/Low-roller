@@ -5,7 +5,7 @@
 LR.Engine = (() => {
   const C = LR.CARDS;
   // Tunable economy (balance-tested with AI self-play).
-  LR.RULES = LR.RULES || { startHot: 3, income: 2, usage: 'window' };
+  LR.RULES = LR.RULES || { startHot: 3, income: 2, usage: 'window', sevensTotal: 7, runTotal: 10 };
   const R = LR.RULES;
   const MAX_HOT = 10, WIN_ROUNDS = 3, NCOL = 3;
   const clampD = (v) => Math.max(0, Math.min(9, v));
@@ -66,7 +66,22 @@ LR.Engine = (() => {
     s.actor = (s.roundFirst + s.landed - 1) % 2;
   }
 
-  const total = (s, p) => s.digits[p].reduce((a, d) => a + (d ?? 0), 0);
+  // Special hands, only once all three reels have landed:
+  //   7-7-7 is a jackpot and counts as R.sevensTotal.
+  //   A run (three digits climbing by one, left to right: 1-2-3, 4-5-6, 7-8-9...) counts as R.runTotal.
+  function special(ds) {
+    if (ds.some((d) => d === null)) return null;
+    if (ds[0] === 7 && ds[1] === 7 && ds[2] === 7) return 'sevens';
+    if (ds[1] === ds[0] + 1 && ds[2] === ds[1] + 1) return 'run';
+    return null;
+  }
+  function score(ds) {
+    const sp = special(ds);
+    if (sp === 'sevens') return R.sevensTotal;
+    if (sp === 'run') return R.runTotal;
+    return ds.reduce((a, d) => a + (d ?? 0), 0);
+  }
+  const total = (s, p) => score(s.digits[p]);
   const cardOf = (s, p, i) => C[s.decks[p][i]];
   const landedCols = (s) => [...Array(s.landed).keys()];
 
@@ -187,32 +202,32 @@ LR.Engine = (() => {
     return s.lastRound;
   }
 
-  // Probability distribution of a player's final total, assuming no more abilities are played.
+  // Probability distribution of a player's final score, assuming no more abilities are played.
+  // Special hands make scoring non-additive, so walk every way the unlanded reels can fall
+  // (at most 10x10x10, and only 10x10 once a window is open).
   function sideDist(s, p) {
-    let base = 0, dist = [1];
-    for (let c = 0; c < NCOL; c++) {
-      const v = s.digits[p][c];
-      if (v !== null) { base += v; continue; }
+    const opts = s.digits[p].map((v, c) => {
+      if (v !== null) return [v];
       const m = s.mods[p][c];
-      const lo = m === 'hex' ? 5 : 0, hi = m === 'lucky' ? 4 : 9, w = 1 / (hi - lo + 1);
-      const next = new Array(dist.length + 9).fill(0);
-      dist.forEach((pr, k) => { for (let x = lo; x <= hi; x++) next[k + x] += pr * w; });
-      dist = next;
-    }
-    return { base, dist };
+      const lo = m === 'hex' ? 5 : 0, hi = m === 'lucky' ? 4 : 9, r = [];
+      for (let x = lo; x <= hi; x++) r.push(x);
+      return r;
+    });
+    const w = 1 / (opts[0].length * opts[1].length * opts[2].length);
+    const dist = new Array(9 * NCOL + 1).fill(0);
+    for (const a of opts[0]) for (const b of opts[1]) for (const c of opts[2]) dist[score([a, b, c])] += w;
+    return dist;
   }
 
   // Chance that player p wins the round (ties count half).
   function winProb(s, p) {
     const A = sideDist(s, p), B = sideDist(s, 1 - p);
     let win = 0;
-    for (let i = 0; i < A.dist.length; i++) {
-      if (!A.dist[i]) continue;
-      for (let j = 0; j < B.dist.length; j++) {
-        const pr = A.dist[i] * B.dist[j];
-        if (!pr) continue;
-        const a = A.base + i, b = B.base + j;
-        if (a < b) win += pr; else if (a === b) win += pr / 2;
+    for (let i = 0; i < A.length; i++) {
+      if (!A[i]) continue;
+      for (let j = 0; j < B.length; j++) {
+        if (!B[j]) continue;
+        if (i < j) win += A[i] * B[j]; else if (i === j) win += (A[i] * B[j]) / 2;
       }
     }
     return win;
@@ -226,6 +241,6 @@ LR.Engine = (() => {
   return {
     MAX_HOT, WIN_ROUNDS, NCOL,
     newMatch, newRound, landColumn, startWindow, targets, whyNot, canPlay, anyPlayable,
-    play, pass, endRound, total, winProb, clone, cardOf, lastEnemyPlay,
+    play, pass, endRound, total, special, score, winProb, clone, cardOf, lastEnemyPlay,
   };
 })();
