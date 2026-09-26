@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Low Roller</title>
+  <meta name="description" content="Spin three reels. Lowest total wins. Outplay bigger decks with hotdogs and brains.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌭</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="logo">LOW ROLLER</div>
+    <div class="pill" title="Coins"><span class="ico">🪙</span><span id="coinsVal">0</span></div>
+    <div class="pill" title="Trophies"><span class="ico">🏆</span><span id="trophyVal">0</span></div>
+    <button id="muteBtn" title="Sound">🔊</button>
+  </header>
+
+  <main>
+    <section id="screen-home" class="screen active"></section>
+    <section id="screen-deck" class="screen"></section>
+    <section id="screen-shop" class="screen"></section>
+    <section id="screen-rules" class="screen"></section>
+    <section id="screen-battle" class="screen"></section>
+  </main>
+
+  <nav id="tabbar">
+    <button data-tab="home" class="active"><span>🎰</span>Play</button>
+    <button data-tab="deck"><span>🃏</span>Deck</button>
+    <button data-tab="shop"><span>🛒</span>Shop</button>
+    <button data-tab="rules"><span>📖</span>How to play</button>
+  </nav>
+</div>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+<div id="toast"></div>
+
+<script src="js/data.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/reels.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
