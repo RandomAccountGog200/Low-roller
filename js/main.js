@@ -7,15 +7,22 @@
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const ORD = ['1st', '2nd', '3rd'];
   const TURN_MS = 20000;
+  // Coin economy. Every finished match pays a base amount plus these bonuses.
+  const PAY = {
+    win: 60, winPerArena: 15, loss: 20, underdog: 30,
+    bossFirst: 500, bossWin: 200, bossLoss: 30,
+    onlineWin: 60, onlineLoss: 20,
+    perRound: 5, perSpecial: 10, dailyWin: 100,
+  };
   // Names travel between players and end up in the DOM, so keep them plain.
   const cleanName = (n) => String(n || '').replace(/[<>&"'`\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18);
 
   // ------------------------------------------------------------------ save
   const SAVE_KEY = 'lowroller_save_v1';
   const DEFAULT = {
-    coins: 100, trophies: 0, bestTrophies: 0, owned: [...LR.STARTER_OWNED], deck: [...LR.STARTER_DECK],
+    coins: 150, trophies: 0, bestTrophies: 0, owned: [...LR.STARTER_OWNED], deck: [...LR.STARTER_DECK],
     wins: 0, losses: 0, bossWins: 0, underdogWins: 0, muted: false, seenHelp: false, crateAt: 0,
-    name: '', avatar: '', onlineWins: 0, onlineLosses: 0,
+    name: '', avatar: '', onlineWins: 0, onlineLosses: 0, dailyWinDay: '',
   };
   let save = load();
   function load() {
@@ -259,7 +266,7 @@
   }
 
   // ---------- shop
-  const CRATE_MS = 3 * 60 * 60 * 1000, CRATE_COINS = 50;
+  const CRATE_MS = 60 * 60 * 1000, CRATE_COINS = 100;
   function renderShop() {
     const root = $('#screen-shop');
     const left = save.crateAt + CRATE_MS - Date.now();
@@ -353,7 +360,7 @@
           <li>Bait counters with a cheap card before you commit the expensive one. Don't overspend on rounds you can't win.</li>
         </ul>
         <h3>🪙 Coins, trophies, shop</h3>
-        <p>Win matches for coins and trophies, climb arenas, and buy new abilities in the Shop. Beat a stronger deck than yours for an <b>Underdog bonus</b>.</p>
+        <p>Win matches for coins and trophies, climb arenas, and buy new abilities in the Shop. Every match pays coins, win or lose, plus bonuses: <b>+${PAY.perRound}</b> per round you win, <b>+${PAY.perSpecial}</b> per 777 or run, <b>+${PAY.underdog}</b> for beating a stronger deck, and <b>+${PAY.dailyWin}</b> for your first win each day. The Shop has a free crate every hour too.</p>
         <h3>🌐 Play online</h3>
         <p>Tap <b>Play Online</b> to quick-match with someone, or create a room and send your friend the code or invite link. Online wins pay coins but don't change trophies.</p>
         <div class="tip"><b>Controls:</b> tap an ability, then tap a glowing reel (or tap the card again if it has no target). Keyboard: <b>1–3</b> pick a card, <b>Enter</b> play it, <b>Space</b> pass, <b>Esc</b> cancel. Digits glow <span style="color:#7dffb3">green</span> when low and <span style="color:#ff8a95">red</span> when high.</div>
@@ -641,17 +648,19 @@
     mine.done = true;
     const o = mine.online, s = mine.s, opp = mine.opp;
     const before = { coins: save.coins, trophies: save.trophies };
-    let coins = 0, note = '', title = won ? 'VICTORY!' : 'DEFEAT';
+    let coins = 0, note = '', title = won ? 'VICTORY!' : 'DEFEAT', bonuses = [];
     if (how === 'desync') { title = 'NO CONTEST'; note = 'The two games got out of sync, so this one doesn\'t count. Sorry!'; }
     else {
-      coins = won ? 35 : how === 'forfeit' ? 0 : 10;
+      coins = won ? PAY.onlineWin : how === 'forfeit' ? 0 : PAY.onlineLoss;
       if (how === 'forfeit') title = 'FORFEIT';
       if (how === 'left') note = `${opp.name} left the match — you win!`;
       if (how === 'oppForfeit') note = `${opp.name} forfeited — you win!`;
       if (won && deckPower(opp.deck) - deckPower(s.decks[0]) >= 2) {
-        coins += 20; save.underdogWins++;
-        note = note || 'Underdog win! Your weaker deck beat a stronger one (+20 🪙)';
+        coins += PAY.underdog; save.underdogWins++;
+        note = note || `Underdog win! Your weaker deck beat a stronger one (+${PAY.underdog} 🪙)`;
       }
+      bonuses = coinBonuses(won, how === 'forfeit');
+      for (const [, v] of bonuses) coins += v;
       if (won) save.onlineWins++; else save.onlineLosses++;
       save.coins += coins;
       persist();
@@ -663,6 +672,7 @@
         <div class="big ${won ? 'win' : 'lose'}">${title}</div>
         <div class="score">${s.score[0]} – ${s.score[1]} <span style="color:var(--muted);font-size:.7em">vs ${opp.avatar} ${opp.name}</span></div>
         <div class="rewards"><div class="reward"><b id="rwCoins">+0</b><span>🪙 coins</span></div></div>
+        ${bonusHTML(bonuses)}
         ${note ? `<div class="note">${note}</div>` : ''}
         <div class="note rm-note" id="rmNote"></div>
         <div class="actions">
@@ -1098,6 +1108,7 @@
   async function showdown() {
     const s = B.s;
     const r = E.endRound(s);
+    if (E.special(s.digits[0]) && r.totals[0] < s.digits[0].reduce((a, d) => a + d, 0)) B.specials = (B.specials || 0) + 1;
     const [t0, t1] = [el('tot0'), el('tot1')];
     t0.classList.remove('leading'); t1.classList.remove('leading');
     if (r.winner === 0) { t0.classList.add('winner'); t1.classList.add('loser'); banner('ROUND WON!', 'green', `${r.totals[0]} beats ${r.totals[1]}`); S.win(); }
@@ -1157,24 +1168,40 @@
     });
   }
 
+
+  // Bonuses on top of the base payout: rounds you took, special hands that helped you, and a
+  // big one for your first win each day. Returns [label, coins] pairs.
+  function coinBonuses(won, forfeited) {
+    if (forfeited) return [];
+    const parts = [], rounds = B.s.score[0], sp = B.specials || 0;
+    if (rounds) parts.push([`${rounds} round${rounds > 1 ? 's' : ''} won`, rounds * PAY.perRound]);
+    if (sp) parts.push([`${sp} special hand${sp > 1 ? 's' : ''}`, sp * PAY.perSpecial]);
+    const today = new Date().toDateString();
+    if (won && save.dailyWinDay !== today) { save.dailyWinDay = today; parts.push(['first win today', PAY.dailyWin]); }
+    return parts;
+  }
+  const bonusHTML = (parts) => (parts.length ? `<div class="bonus-list">${parts.map(([l, v]) => `<span>+${v} ${l}</span>`).join('')}</div>` : '');
+
   function finishMatch(won, forfeited = false) {
     const s = B.s, opp = B.opp, boss = B.boss;
     const before = { coins: save.coins, trophies: save.trophies };
     let coins, trophies = 0, note = '';
     const a = LR.arenaFor(save.trophies);
     if (boss) {
-      coins = won ? (save.bossWins ? 120 : 300) : 15;
+      coins = won ? (save.bossWins ? PAY.bossWin : PAY.bossFirst) : PAY.bossLoss;
       if (won) { save.bossWins++; note = save.bossWins === 1 ? 'First boss win — huge payday!' : 'The Golden Frank bows again.'; }
       else note = 'The Golden Frank has Rewind too — bait it out first.';
     } else if (won) {
-      coins = 40 + a * 10;
+      coins = PAY.win + a * PAY.winPerArena;
       trophies = irand(27, 33);
     } else {
-      coins = forfeited ? 0 : 10;
+      coins = forfeited ? 0 : PAY.loss;
       trophies = -Math.min(save.trophies, irand(17, 22));
     }
     const underdog = won && deckPower(opp.deck) - deckPower(save.deck) >= 2;
-    if (underdog) { coins += 20; save.underdogWins++; note = 'Underdog win! Your weaker deck beat a stronger one (+20 🪙)'; }
+    if (underdog) { coins += PAY.underdog; save.underdogWins++; note = `Underdog win! Your weaker deck beat a stronger one (+${PAY.underdog} 🪙)`; }
+    const bonuses = coinBonuses(won, forfeited);
+    for (const [, v] of bonuses) coins += v;
     save.coins += coins;
     save.trophies = Math.max(0, save.trophies + trophies);
     save.bestTrophies = Math.max(save.bestTrophies, save.trophies);
@@ -1193,6 +1220,7 @@
           <div class="reward"><b id="rwCoins">+0</b><span>🪙 coins</span></div>
           ${boss ? '' : `<div class="reward"><b id="rwTr">${trophies >= 0 ? '+' : ''}0</b><span>🏆 trophies</span></div>`}
         </div>
+        ${bonusHTML(bonuses)}
         ${note ? `<div class="note">${note}</div>` : ''}
         <div class="actions">
           <button class="btn ghost small" id="mHome">Home</button>

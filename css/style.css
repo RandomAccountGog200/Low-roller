@@ -537,3 +537,5 @@ body.in-battle #topbar, body.in-battle #tabbar { display: none; }
 .result .rm-note { color: var(--sky); min-height: 1em; }
 .total.special { border: 2px solid #c98bff; background: rgba(180,92,255,.16); box-shadow: 0 0 24px rgba(180,92,255,.45); }
 .total.special small { color: #e3c6ff; }
+.bonus-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+.bonus-list span { font-size: 12px; font-weight: 900; padding: 4px 10px; border-radius: 99px; background: rgba(255,200,61,.14); color: var(--mustard); border: 1px solid rgba(255,200,61,.3); }
