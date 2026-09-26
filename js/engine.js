@@ -12,8 +12,12 @@ LR.Engine = (() => {
   const clampH = (v) => Math.max(0, Math.min(MAX_HOT, v));
   const tri = (v) => [v, v, v];
 
-  function newMatch(decks, firstActor) {
+  // `flip` marks the guest in an online match: its local player 0 is seat 1. Anything that draws
+  // random numbers for both players walks the seats in the same absolute order, so two clients
+  // sharing a seeded rng stay in lockstep while each one sees itself as player 0.
+  function newMatch(decks, firstActor, flip = false) {
     return {
+      flip,
       round: 0, score: [0, 0], hot: [R.startHot, R.startHot], decks,
       firstActor, roundFirst: firstActor,
       digits: [tri(null), tri(null)], mods: [tri(null), tri(null)], frozen: [tri(false), tri(false)],
@@ -41,9 +45,11 @@ LR.Engine = (() => {
   }
 
   // Lands the next column for both players. Returns the column index.
+  const seats = (s) => (s.flip ? [1, 0] : [0, 1]);
+
   function landColumn(s, rng = Math.random) {
     const c = s.landed;
-    for (let p = 0; p < 2; p++) {
+    for (const p of seats(s)) {
       s.digits[p][c] = rollDigit(s.mods[p][c], rng);
       s.mods[p][c] = null;
     }
@@ -134,7 +140,7 @@ LR.Engine = (() => {
       case 'snack':  gainHot(p, 1); break;
       case 'thief': { const k = Math.min(2, s.hot[e]); gainHot(e, -k); gainHot(p, k); break; }
       case 'chaos':
-        for (const c of landedCols(s)) for (let q = 0; q < 2; q++)
+        for (const c of landedCols(s)) for (const q of seats(s))
           if (!s.frozen[q][c]) d[q][c] = Math.floor(rng() * 10);
         break;
       case 'timewarp':

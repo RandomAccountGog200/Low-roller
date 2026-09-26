@@ -7,12 +7,15 @@
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const ORD = ['1st', '2nd', '3rd'];
   const TURN_MS = 20000;
+  // Names travel between players and end up in the DOM, so keep them plain.
+  const cleanName = (n) => String(n || '').replace(/[<>&"'`\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18);
 
   // ------------------------------------------------------------------ save
   const SAVE_KEY = 'lowroller_save_v1';
   const DEFAULT = {
     coins: 100, trophies: 0, bestTrophies: 0, owned: [...LR.STARTER_OWNED], deck: [...LR.STARTER_DECK],
     wins: 0, losses: 0, bossWins: 0, underdogWins: 0, muted: false, seenHelp: false, crateAt: 0,
+    name: '', avatar: '', onlineWins: 0, onlineLosses: 0,
   };
   let save = load();
   function load() {
@@ -25,6 +28,8 @@
     d.deck = d.deck.filter((id) => d.owned.includes(id));
     d.deck = [...new Set(d.deck)];
     for (const id of d.owned) if (d.deck.length < 3 && !d.deck.includes(id)) d.deck.push(id);
+    d.name = cleanName(d.name) || `Player ${Math.floor(1000 + Math.random() * 9000)}`;
+    if (!LR.OPP_AVATARS.includes(d.avatar)) d.avatar = pick(LR.OPP_AVATARS);
     return d;
   }
   function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* ignore */ } }
@@ -128,13 +133,14 @@
 
   // ------------------------------------------------------------------ screens
   let current = 'home', heroTimer = null;
-  const renderers = { home: renderHome, deck: renderDeck, shop: renderShop, rules: renderRules };
+  const renderers = { home: renderHome, deck: renderDeck, shop: renderShop, rules: renderRules, online: renderOnline };
 
   function show(name) {
     document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === `screen-${name}`));
     document.querySelectorAll('#tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
     document.body.classList.toggle('in-battle', name === 'battle');
     current = name;
+    if (name !== 'online' && name !== 'battle') stopSearching();
     clearTimeout(heroTimer);
     if (renderers[name]) renderers[name]();
     renderTop();
@@ -164,6 +170,7 @@
         </div>
         <div class="home-actions">
           <button class="btn" id="goBattle">⚔️ BATTLE</button>
+          <button class="btn blue" id="goOnline">🌐 PLAY ONLINE<small>vs real people · quick match or invite a friend</small></button>
           <button class="btn purple boss-btn" id="goBoss"><span style="font-size:30px">👑</span>
             <span>BOSS FIGHT<small>The Golden Frank · the best deck in the game${save.bossWins ? ` · beaten ${save.bossWins}×` : ''}</small></span></button>
         </div>
@@ -180,6 +187,7 @@
     hd.onclick = () => { S.click(); show('deck'); };
     $('#goBattle').onclick = () => { S.select(); startBattle({ boss: false }); };
     $('#goBoss').onclick = () => { S.select(); startBattle({ boss: true }); };
+    $('#goOnline').onclick = () => { S.select(); show('online'); };
 
     const hr = $('#heroReels');
     const reels = [0, 1, 2].map((c) => { const r = new LR.Reel(0, c); r.set(irand(0, 9)); hr.appendChild(r.el); return r; });
@@ -340,6 +348,8 @@
         </ul>
         <h3>🪙 Coins, trophies, shop</h3>
         <p>Win matches for coins and trophies, climb arenas, and buy new abilities in the Shop. Beat a stronger deck than yours for an <b>Underdog bonus</b>.</p>
+        <h3>🌐 Play online</h3>
+        <p>Tap <b>Play Online</b> to quick-match with someone, or create a room and send your friend the code or invite link. Online wins pay coins but don't change trophies.</p>
         <div class="tip"><b>Controls:</b> tap an ability, then tap a glowing reel (or tap the card again if it has no target). Keyboard: <b>1–3</b> pick a card, <b>Enter</b> play it, <b>Space</b> pass, <b>Esc</b> cancel. Digits glow <span style="color:#7dffb3">green</span> when low and <span style="color:#ff8a95">red</span> when high.</div>
       </div>`;
   }
@@ -372,6 +382,302 @@
     };
   }
 
+  // ------------------------------------------------------------------ online
+  // `online` lives as long as the peer connection, across rematches. `search` exists while we're
+  // looking for someone (quick match, hosting a room, or joining one).
+  let online = null, search = null;
+
+  function netErrText(e) {
+    const t = e && e.type;
+    if (t === 'browser-incompatible') return "This browser can't play online";
+    if (t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed') return "Can't reach the matchmaking server";
+    return (e && e.message) || 'Connection failed';
+  }
+
+  function renderOnline() {
+    const root = $('#screen-online');
+    root.innerHTML = `
+      <div class="page-title">Play Online</div>
+      <div class="page-sub">Real people, real decks. Bring your best three.</div>
+      <div class="online-me">
+        <button class="avatar" id="avBtn" title="Change avatar">${save.avatar}</button>
+        <div class="who-edit"><label for="nameIn">Your name</label>
+          <input id="nameIn" maxlength="18" value="${save.name}" autocomplete="off" spellcheck="false"></div>
+        <div class="stat"><b>${save.onlineWins}–${save.onlineLosses}</b><span>Online W–L</span></div>
+      </div>
+      <div class="deck-preview" id="onDeck"></div>
+      <div id="onlineBody"></div>`;
+    const dk = $('#onDeck');
+    save.deck.forEach((id) => dk.appendChild(cardEl(id, { mini: true })));
+    dk.onclick = () => { if (search) return; S.click(); show('deck'); };
+    $('#avBtn').onclick = () => {
+      const A = LR.OPP_AVATARS;
+      save.avatar = A[(A.indexOf(save.avatar) + 1) % A.length];
+      persist(); S.click();
+      $('#avBtn').textContent = save.avatar;
+    };
+    const ni = $('#nameIn');
+    ni.oninput = () => { const n = cleanName(ni.value); if (n) { save.name = n; persist(); } };
+    ni.onblur = () => { ni.value = save.name; };
+    renderOnlineBody();
+  }
+
+  function renderOnlineBody() {
+    const box = $('#onlineBody');
+    if (!box) return;
+    if (online && !online.gone) {
+      box.innerHTML = `<div class="online-wait"><div class="searching big">✅ Connected! Getting ready…</div></div>`;
+      return;
+    }
+    if (!search) {
+      const ok = LR.Net.available();
+      box.innerHTML = `
+        ${ok ? '' : `<div class="net-warn">Online play couldn't load. Check your internet connection and reload the page.</div>`}
+        <div class="online-actions">
+          <button class="btn" id="qmBtn" ${ok ? '' : 'disabled'}>⚡ QUICK MATCH<small>play anyone else who's searching</small></button>
+          <div class="or"><span>or play a friend</span></div>
+          <button class="btn purple" id="hostBtn" ${ok ? '' : 'disabled'}>🏠 CREATE ROOM<small>get a code to send them</small></button>
+          <div class="join-row">
+            <input id="codeIn" placeholder="ROOM CODE" maxlength="8" autocomplete="off" spellcheck="false">
+            <button class="btn small" id="joinBtn" ${ok ? '' : 'disabled'}>Join</button>
+          </div>
+        </div>
+        <div class="online-foot">Matches connect browser-to-browser. Online wins pay 🪙 coins but don't change trophies.</div>`;
+      $('#qmBtn').onclick = () => { S.select(); startSearch('quick'); };
+      $('#hostBtn').onclick = () => { S.select(); startSearch('host'); };
+      const ci = $('#codeIn');
+      const join = () => {
+        const code = LR.Net.cleanCode(ci.value);
+        if (code.length < 4) { S.deny(); toast('Type the room code your friend sent you'); return; }
+        S.select(); startSearch('join', code);
+      };
+      $('#joinBtn').onclick = join;
+      ci.oninput = () => { ci.value = LR.Net.cleanCode(ci.value); };
+      ci.onkeydown = (e) => { if (e.key === 'Enter') join(); };
+      return;
+    }
+    const cancel = '<button class="btn ghost small" id="cancelBtn">Cancel</button>';
+    if (search.mode === 'host' && search.code) {
+      const link = inviteLink(search.code);
+      box.innerHTML = `<div class="online-wait">
+        <div class="room-code-lbl">Room code</div>
+        <div class="room-code">${search.code}</div>
+        <div class="invite-link">${link}</div>
+        <div class="actions-row"><button class="btn small" id="copyBtn">🔗 Copy invite link</button>${cancel}</div>
+        <div class="searching"><span class="spin"></span>Waiting for your friend to join…</div></div>`;
+      $('#copyBtn').onclick = () => copyText(link);
+    } else {
+      box.innerHTML = `<div class="online-wait"><div class="searching big"><span class="spin"></span>${search.status}</div>
+        <div class="actions-row">${cancel}</div></div>`;
+    }
+    $('#cancelBtn').onclick = () => { S.click(); stopSearching(); };
+  }
+
+  const inviteLink = (code) => `${location.origin}${location.pathname}?room=${code}`;
+  function copyText(txt) {
+    const done = () => { S.good(); toast('Invite link copied — send it to a friend!'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, () => window.prompt('Copy this link:', txt));
+    else window.prompt('Copy this link:', txt);
+  }
+
+  async function startSearch(mode, code) {
+    if (!LR.Net.available()) { S.deny(); toast("Online play couldn't load"); return; }
+    stopSearching();
+    leaveOnline();
+    const me = {
+      mode, code: null, cancelled: false,
+      status: mode === 'quick' ? 'Looking for an opponent…' : mode === 'join' ? `Joining room ${code}…` : 'Making a room…',
+    };
+    search = me;
+    renderOnlineBody();
+    const status = (st) => {
+      if (search !== me) return;
+      me.status = st === 'waiting' ? 'Waiting for an opponent…' : 'Found someone — connecting…';
+      renderOnlineBody();
+    };
+    try {
+      const sess = mode === 'quick' ? await LR.Net.quickMatch(status, () => me.cancelled)
+        : mode === 'host' ? await LR.Net.hostRoom((c) => { me.code = c; if (search === me) renderOnlineBody(); })
+        : await LR.Net.joinRoom(code);
+      if (me.cancelled) { sess.close(); return; }
+      search = null;
+      connected(sess);
+    } catch (e) {
+      if (me.cancelled) return;
+      search = null;
+      S.deny(); toast(netErrText(e));
+      if (current === 'online') renderOnlineBody();
+    }
+  }
+
+  function stopSearching() {
+    if (!search) return;
+    search.cancelled = true;
+    search = null;
+    LR.Net.cancel();
+    if (current === 'online') renderOnlineBody();
+  }
+
+  function connected(sess) {
+    const o = { session: sess, opp: null, seat: sess.role === 'host' ? 0 : 1, rematch: { me: false, them: false }, gone: false, deck: save.deck.slice() };
+    online = o;
+    // Hello goes out before we listen, so the host's hello always reaches the guest before 'start'.
+    sess.send({ t: 'hello', v: 1, name: save.name, avatar: save.avatar, deck: o.deck, trophies: save.trophies });
+    sess.onClose = () => remoteGone(o, 'disconnect');
+    sess.listen((m) => onNet(o, m));
+    S.good();
+    if (current === 'online') renderOnlineBody();
+  }
+
+  function onNet(o, m) {
+    if (o !== online) return;
+    switch (m.t) {
+      case 'hello': {
+        const deck = Array.isArray(m.deck) ? m.deck.filter((id) => typeof id === 'string' && Object.hasOwn(C, id)) : [];
+        if (deck.length !== 3 || new Set(deck).size !== 3) { toast('Opponent sent an invalid deck'); leaveOnline(); if (current === 'online') renderOnlineBody(); return; }
+        o.opp = {
+          name: cleanName(m.name) || 'Opponent', avatar: LR.OPP_AVATARS.includes(m.avatar) ? m.avatar : '🙂',
+          trophies: Math.max(0, Math.floor(+m.trophies) || 0), deck, human: true,
+        };
+        if (o.seat === 0) hostStart(o);
+        break;
+      }
+      case 'start': if (o.seat === 1 && o.opp) beginOnline(o, m.seed >>> 0, m.first === 0 ? 1 : 0); break;
+      case 'act': if (B && B.online === o) { B.inbox.push(m); flushInbox(); } break;
+      case 'forfeit': remoteGone(o, 'forfeit'); break;
+      case 'rematch': o.rematch.them = true; rematchUpdate(o); break;
+      case 'bye': remoteGone(o, 'left'); break;
+    }
+  }
+
+  // The host deals: it picks the seed both browsers roll with, and who acts first (in host seats).
+  function hostStart(o) {
+    const seed = Math.floor(Math.random() * 2 ** 32), first = Math.random() < 0.5 ? 0 : 1;
+    o.session.send({ t: 'start', seed, first });
+    beginOnline(o, seed, first);
+  }
+
+  function beginOnline(o, seed, first) {
+    o.rematch = { me: false, them: false };
+    closeModal();
+    startBattle({ online: o, seed, first });
+  }
+
+  function remoteGone(o, why) {
+    if (why !== 'forfeit') {
+      if (o.gone) return;
+      o.gone = true;
+      if (online === o) online = null;
+      o.session.close();
+    }
+    if (B && B.online === o && !B.done) {
+      B.remoteLeft = why;
+      B.aborted = true;
+      if (B.resolve) { const r = B.resolve; B.resolve = null; clearInterval(B.timerId); r({ type: 'pass' }); }
+      flushInbox();
+    } else if (B && B.online === o) rematchUpdate(o);
+    else if (current === 'online') { toast('Opponent disconnected'); renderOnlineBody(); }
+  }
+
+  function leaveOnline() {
+    const o = online;
+    if (!o) return;
+    online = null;
+    o.gone = true;
+    o.session.send({ t: 'bye' });
+    setTimeout(() => o.session.close(), 250);
+  }
+
+  function rematchUpdate(o) {
+    const btn = $('#mAgain'), note = $('#rmNote');
+    if (!btn || !note || !B || B.online !== o || !B.done) return;
+    if (o.gone) { btn.disabled = true; btn.textContent = 'Rematch'; note.textContent = `${B.opp.name} left the table`; return; }
+    btn.disabled = o.rematch.me;
+    btn.textContent = o.rematch.me ? 'Waiting…' : 'Rematch';
+    note.textContent = o.rematch.them ? `${B.opp.name} wants a rematch!` : o.rematch.me ? `Waiting for ${B.opp.name}…` : '';
+    if (o.seat === 0 && o.rematch.me && o.rematch.them) hostStart(o);
+  }
+
+  // Both browsers fingerprint the board (in seat order) before every move. If they ever disagree
+  // the match is void rather than silently diverging.
+  function sig(s) {
+    const o = s.flip ? [1, 0] : [0, 1];
+    return JSON.stringify([s.round, s.landed, ...o.map((p) => [s.hot[p], s.digits[p], s.score[p], s.used[p], s.frozen[p]])]);
+  }
+
+  function remoteTurn() {
+    return new Promise((res) => { B.remoteWaiter = res; flushInbox(); });
+  }
+
+  function flushInbox() {
+    if (!B || !B.remoteWaiter || (!B.aborted && !B.inbox.length)) return;
+    const r = B.remoteWaiter;
+    B.remoteWaiter = null;
+    r(B.aborted ? { type: 'pass' } : B.inbox.shift());
+  }
+
+  // Turn a move from the other browser (their seat 0 is our player 1) into a checked local action.
+  function fromRemote(m) {
+    const s = B.s;
+    const bad = () => { B.desync = true; B.aborted = true; throw ABORT; };
+    if (m.sig !== sig(s)) bad();
+    if (m.type === 'pass') return { type: 'pass' };
+    const i = m.i, t = m.target ? { side: 1 - m.target.side, col: m.target.col } : null;
+    if (!Number.isInteger(i) || i < 0 || i > 2 || !E.canPlay(s, 1, i)) bad();
+    const ok = E.targets(s, 1, i).find((x) => (x === null ? t === null : !!t && x.side === t.side && x.col === t.col));
+    if (ok === undefined) bad();
+    return { type: 'play', i, target: ok };
+  }
+
+  function finishOnline(mine, won, how) {
+    mine.done = true;
+    const o = mine.online, s = mine.s, opp = mine.opp;
+    const before = { coins: save.coins, trophies: save.trophies };
+    let coins = 0, note = '', title = won ? 'VICTORY!' : 'DEFEAT';
+    if (how === 'desync') { title = 'NO CONTEST'; note = 'The two games got out of sync, so this one doesn\'t count. Sorry!'; }
+    else {
+      coins = won ? 35 : how === 'forfeit' ? 0 : 10;
+      if (how === 'forfeit') title = 'FORFEIT';
+      if (how === 'left') note = `${opp.name} left the match — you win!`;
+      if (how === 'oppForfeit') note = `${opp.name} forfeited — you win!`;
+      if (won && deckPower(opp.deck) - deckPower(s.decks[0]) >= 2) {
+        coins += 20; save.underdogWins++;
+        note = note || 'Underdog win! Your weaker deck beat a stronger one (+20 🪙)';
+      }
+      if (won) save.onlineWins++; else save.onlineLosses++;
+      save.coins += coins;
+      persist();
+    }
+    if (won) { S.fanfare(); rain(['🌭', '🌭', '🪙', '🏆'], 50); } else S.lose();
+    setActive(null);
+    modal(`
+      <div class="result">
+        <div class="big ${won ? 'win' : 'lose'}">${title}</div>
+        <div class="score">${s.score[0]} – ${s.score[1]} <span style="color:var(--muted);font-size:.7em">vs ${opp.avatar} ${opp.name}</span></div>
+        <div class="rewards"><div class="reward"><b id="rwCoins">+0</b><span>🪙 coins</span></div></div>
+        ${note ? `<div class="note">${note}</div>` : ''}
+        <div class="note rm-note" id="rmNote"></div>
+        <div class="actions">
+          <button class="btn ghost small" id="mHome">Home</button>
+          <button class="btn small" id="mAgain">Rematch</button>
+        </div>
+      </div>`, (m) => {
+      countUp($('#rwCoins', m), 0, coins, 900);
+      setTimeout(() => { $('#rwCoins', m).textContent = `+${coins}`; }, 950);
+      for (let k = 0; k < Math.min(8, Math.ceil(coins / 10)); k++) S.coin(0.15 + k * 0.09);
+      $('#mHome', m).onclick = () => { if (online === o) leaveOnline(); closeModal(); B = null; show('home'); renderTop(before); };
+      $('#mAgain', m).onclick = () => {
+        if (o.gone || o.rematch.me) return;
+        S.select();
+        o.rematch.me = true;
+        o.session.send({ t: 'rematch' });
+        rematchUpdate(o);
+      };
+      rematchUpdate(o);
+    });
+    renderTop();
+  }
+
   // ------------------------------------------------------------------ battle
   const ABORT = Symbol('abort');
   let B = null;
@@ -386,7 +692,7 @@
           <div class="side-head">
             <div class="avatar">${o.avatar}</div>
             <div class="who"><div class="nm">${o.name}</div>
-              <div class="tr">${o.boss ? '👑 BOSS' : `🏆 ${o.trophies}`} <span class="thinking"><i></i><i></i><i></i></span></div></div>
+              <div class="tr">${o.boss ? '👑 BOSS' : `${o.human ? '🌐 ' : ''}🏆 ${o.trophies}`} <span class="thinking"><i></i><i></i><i></i></span></div></div>
             <div class="pips" id="pips1"></div>
             <div class="enemy-hand" id="hand1"></div>
           </div>
@@ -716,11 +1022,15 @@
     for (;;) {
       const p = s.actor;
       setActive(p);
-      if (p === 1) setFeed(`${B.opp.name} is thinking…`, 1);
+      if (p === 1) setFeed(`${B.opp.name} is ${B.online ? 'deciding' : 'thinking'}…`, 1);
       else if (s.log.length && s.log[s.log.length - 1].type === 'pass') setFeed(`${B.opp.name} passed — your move`, 0);
       else if (!s.log.length) setFeed('Your move — play an ability or pass', 0);
-      const act = p === 0 ? await humanTurn() : await aiTurn();
+      let act = p === 0 ? await humanTurn() : B.online ? await remoteTurn() : await aiTurn();
       if (!B || B.aborted) throw ABORT;
+      if (B.online) {
+        if (p === 0) B.online.session.send({ t: 'act', type: act.type, i: act.i, target: act.target || null, sig: sig(s) });
+        else act = fromRemote(act);
+      }
       if (act.type === 'pass') {
         S.pass();
         const closed = E.pass(s, p);
@@ -729,7 +1039,7 @@
         if (p === 1) await wait(250);
       } else {
         const prev = { digits: s.digits.map((r) => r.slice()), mods: s.mods.map((r) => r.slice()), frozen: s.frozen.map((r) => r.slice()), hot: s.hot.slice() };
-        const entry = E.play(s, p, act.i, act.target);
+        const entry = E.play(s, p, act.i, act.target, B.rng);
         await animatePlay(entry, prev);
       }
     }
@@ -751,7 +1061,7 @@
     await wait(1300);
     for (let c = 0; c < 3; c++) {
       await wait(c === 0 ? 150 : 350);
-      E.landColumn(s);
+      E.landColumn(s, B.rng);
       const dur = 1050 + c * 180;
       B.reels[0][c].land(s.digits[0][c], ms(dur), true);
       setTimeout(() => B && B.reels && B.reels[1][c].land(s.digits[1][c], ms(dur), false), ms(160));
@@ -779,26 +1089,37 @@
     await wait(2100);
   }
 
-  async function startBattle({ boss }) {
-    const opp = boss
-      ? { ...LR.BOSS, deck: [...LR.BOSS.deck], profile: LR.AI.makeProfile(LR.BOSS.profile.skill) }
+  async function startBattle({ boss = false, online: o = null, seed = 0, first = 0 }) {
+    const opp = o ? { ...o.opp, deck: o.opp.deck.slice() }
+      : boss ? { ...LR.BOSS, deck: [...LR.BOSS.deck], profile: LR.AI.makeProfile(LR.BOSS.profile.skill) }
       : makeOpponent(save.trophies);
-    const s = E.newMatch([save.deck.slice(), opp.deck.slice()], Math.random() < 0.5 ? 0 : 1);
-    B = { s, opp, boss, sel: null, resolve: null, reels: null, aborted: false, autoplay: window.__LR_AUTOPLAY || false };
+    const myDeck = o ? o.deck.slice() : save.deck.slice();
+    const s = E.newMatch([myDeck, opp.deck.slice()], o ? first : Math.random() < 0.5 ? 0 : 1, !!o && o.seat === 1);
+    B = {
+      s, opp, boss, sel: null, resolve: null, reels: null, aborted: false, autoplay: window.__LR_AUTOPLAY || false,
+      online: o, rng: o ? LR.Net.rng(seed) : Math.random, inbox: [], remoteWaiter: null,
+    };
     const mine = B;
     show('battle');
     buildBattle();
     B.reels.flat().forEach((r) => r.showUnknown());
     setFeed(`${opp.name} ${opp.boss ? 'wants to see your best' : 'joins the table'}`, 1);
-    banner(boss ? '👑 BOSS FIGHT' : 'BATTLE!', boss ? '' : 'white', `vs ${opp.name}`, 1500);
+    banner(boss ? '👑 BOSS FIGHT' : o ? '🌐 ONLINE BATTLE' : 'BATTLE!', boss ? '' : 'white', `vs ${opp.name}`, 1500);
     try {
       await wait(1500);
       while (!s.over) await playRound();
       await wait(300);
-      finishMatch(s.winner === 0);
+      if (o) finishOnline(mine, s.winner === 0, s.winner === 0 ? 'win' : 'loss');
+      else finishMatch(s.winner === 0);
     } catch (e) {
       if (e !== ABORT) throw e;
-      if (mine.forfeit) finishMatch(false, true);
+      if (B !== mine) return;
+      if (o) {
+        if (mine.forfeit) finishOnline(mine, false, 'forfeit');
+        else if (mine.desync) finishOnline(mine, false, 'desync');
+        else if (s.over) finishOnline(mine, s.winner === 0, s.winner === 0 ? 'win' : 'loss');
+        else if (mine.remoteLeft) finishOnline(mine, true, mine.remoteLeft === 'forfeit' ? 'oppForfeit' : 'left');
+      } else if (mine.forfeit) finishMatch(false, true);
     }
   }
 
@@ -810,6 +1131,8 @@
         closeModal();
         if (!B) return;
         B.forfeit = true; B.aborted = true;
+        if (B.online) B.online.session.send({ t: 'forfeit' });
+        flushInbox();
         if (B.resolve) { const r = B.resolve; B.resolve = null; clearInterval(B.timerId); r({ type: 'pass' }); }
       };
     });
@@ -879,8 +1202,12 @@
     else if (e.key === 'Escape' && B.sel !== null) { B.sel = null; renderHands(); clearTargets(); }
   });
   S.setMuted(save.muted);
-  show('home');
-  if (!save.seenHelp) {
+  window.addEventListener('pagehide', () => { if (online) online.session.send({ t: 'bye' }); });
+  const invite = LR.Net.cleanCode(new URLSearchParams(location.search).get('room'));
+  if (invite) history.replaceState(null, '', location.pathname);
+  show(invite ? 'online' : 'home');
+  if (invite) startSearch('join', invite);
+  else if (!save.seenHelp) {
     modal(`<h2>Welcome to Low Roller!</h2>${rulesHTML()}<div class="actions"><button class="btn" id="mGo">Let's roll</button></div>`, (m) => {
       $('#mGo', m).onclick = () => { save.seenHelp = true; persist(); closeModal(); };
     });
@@ -892,6 +1219,7 @@
     speed(x) { SPEED = x; },
     autoplay(on) { window.__LR_AUTOPLAY = on; if (B) B.autoplay = on; },
     start(boss = false) { return startBattle({ boss }); },
+    get online() { return online; },
     reset() { localStorage.removeItem(SAVE_KEY); save = load(); show('home'); },
     give(coins) { save.coins += coins; persist(); renderTop(); },
   };
