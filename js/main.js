@@ -336,7 +336,7 @@
         <h3>🎰 Special hands</h3>
         <ul>
           <li><b>7-7-7 Jackpot</b> counts as a total of <b>${LR.RULES.sevensTotal}</b> instead of 21.</li>
-          <li><b>Run</b>: three digits climbing by one, left to right (0-1-2, 1-2-3 … 7-8-9), counts as <b>${LR.RULES.runTotal}</b>.</li>
+          <li><b>Run</b>: three digits climbing by one, left to right (0-1-2, 1-2-3 … 7-8-9), counts as <b>${LR.RULES.runTotal}</b> — or its real total if that's lower, so 1-2-3 stays 6.</li>
           <li>Watch out: a Jinx or Nudge can turn someone's hand into a special one — for better or worse.</li>
         </ul>
         <h3>🌭 Hotdogs are your elixir</h3>
@@ -392,7 +392,7 @@
   // `online` lives as long as the peer connection, across rematches. `search` exists while we're
   // looking for someone (quick match, hosting a room, or joining one).
   let online = null, search = null;
-  const NET_VERSION = 2; // bump whenever the rules change, so both players always play the same game
+  const NET_VERSION = 3; // bump whenever the rules change, so both players always play the same game
 
   function netErrText(e) {
     const t = e && e.type;
@@ -827,12 +827,12 @@
       }
       const sp = s.landed === 3 ? E.special(s.digits[p]) : null;
       box.querySelector('small').textContent = sp === 'sevens' ? `🎰 777 = ${LR.RULES.sevensTotal}!`
-        : sp === 'run' ? `📶 RUN = ${LR.RULES.runTotal}!`
+        : sp === 'run' ? `📶 RUN = ${t[p]}!`
         : s.landed < 3 && s.landed > 0 ? `+ ${3 - s.landed} to land` : s.landed === 0 ? 'spinning…' : '';
       box.classList.toggle('special', !!sp);
       box.classList.toggle('leading', s.landed > 0 && t[p] < t[1 - p]);
-      if (bump && sp && B.shownSpecial[p] !== sp) {
-        const raw = s.digits[p].reduce((x, d) => x + d, 0), helped = t[p] < raw;
+      const raw = sp ? s.digits[p].reduce((x, d) => x + d, 0) : 0, helped = t[p] < raw;
+      if (bump && helped && B.shownSpecial[p] !== sp) {
         floater(box, `${sp === 'sevens' ? '🎰 JACKPOT' : '📶 RUN'} ${raw}→${t[p]}`, helped === (p === 0) ? 'good' : 'bad');
         (sp === 'sevens' ? S.fanfare : S.good)();
       }

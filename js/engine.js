@@ -68,7 +68,8 @@ LR.Engine = (() => {
 
   // Special hands, only once all three reels have landed:
   //   7-7-7 is a jackpot and counts as R.sevensTotal.
-  //   A run (three digits climbing by one, left to right: 1-2-3, 4-5-6, 7-8-9...) counts as R.runTotal.
+  //   A run (three digits climbing by one, left to right: 1-2-3, 4-5-6, 7-8-9...) counts as R.runTotal,
+  //   or its real total if that's lower, so a run can only ever help (1-2-3 stays 6).
   function special(ds) {
     if (ds.some((d) => d === null)) return null;
     if (ds[0] === 7 && ds[1] === 7 && ds[2] === 7) return 'sevens';
@@ -78,7 +79,7 @@ LR.Engine = (() => {
   function score(ds) {
     const sp = special(ds);
     if (sp === 'sevens') return R.sevensTotal;
-    if (sp === 'run') return R.runTotal;
+    if (sp === 'run') return Math.min(R.runTotal, ds[0] + ds[1] + ds[2]);
     return ds.reduce((a, d) => a + (d ?? 0), 0);
   }
   const total = (s, p) => score(s.digits[p]);
